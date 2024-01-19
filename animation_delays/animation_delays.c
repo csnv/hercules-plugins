@@ -278,7 +278,7 @@ static int post_skill_not_ok(int retVal, uint16 skill_id, struct map_session_dat
 		delay = abs(delay) * sd_adelay / 100;
 	}
 
-	if (last_skill_adelay != 0 && delay > last_skill_adelay->max_delay) {
+	if (last_skill_adelay->max_delay != 0 && delay > last_skill_adelay->max_delay) {
 		delay = last_skill_adelay->max_delay;
 	}
 

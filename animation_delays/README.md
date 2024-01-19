@@ -4,7 +4,7 @@
 Prevents unfair play by users of modified client files or speedhacks by imposing hard delays similar to client's.
 
 ### Instalation
-Properly place the `db/skill_adelay.conf` file in the `db` directory (**not** in one of its subdirectories) and follow this guide for the `animation_adelays.c` file.
+Properly place the `db/skill_adelay.conf` file in the `db` directory (**do not** place it in any of its subdirectories) and [install](https://wiki.herc.ws/wiki/Hercules_Plugin_Manager#Building_a_plugin) the plugin file `animation_adelays.c`.
 
 ### Features
 - Invididualized delay parameters for each skill per the configuration file skill_adelay.conf

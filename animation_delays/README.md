@@ -1,4 +1,4 @@
-# HERCULES PLUGIN
+# HERCULES/HERACLES PLUGIN
 
 ## Animation delays
 Prevents unfair play by users of modified client files or speedhacks by imposing hard delays similar to client's.

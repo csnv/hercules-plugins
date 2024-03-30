@@ -1,4 +1,4 @@
-# HERCULES PLUGIN
+# HERCULES/HERACLES PLUGIN
 
 ## Autodelete monster
 Enables summoning monsters that will be removed, if not killed previously, after the specified time in seconds.

@@ -3,7 +3,7 @@
 //===== By: ========================================================
 //= csnv
 //===== Version: ===================================================
-//= 1.0
+//= 1.1
 //===== Description: ===============================================
 //= Imitates skill animations removed in 2018+ clients
 //===== Repository: ================================================
@@ -54,15 +54,21 @@ struct skill_animation_data sad_list[] = {
 struct skill_environment_data {
 	struct skill_animation_data* anim_data;
 	int target_id;
-	int dir;
+	int8 dir;
+	int8 step;
 };
 
-void send_attack_packet(struct block_list* bl, int motion_speed);
+struct skill_animation_timer {
+	int64 tid;
+};
+
+void send_attack_packet(struct block_list* bl, int target_id, int motion_speed);
 void send_simple_dir(struct block_list* src, int target_id, int dir);
 static int use_animation(int tid, int64 tick, int id, intptr_t data);
 static int check_used_skill(int retVal, struct block_list* src, struct block_list* dst, int64 tick, int sdelay, int ddelay, int64 in_damage, int div, uint16 skill_id, uint16 skill_lv, enum battle_dmg_type type);
 static struct skill_animation_data* get_animation_info(int skill_id);
-static int calc_dir_counter_clockwise(int dir);
+static void on_unit_teleported(struct map_session_data* sd, short m, int x, int y);
+static void clear_timer(struct block_list* bl, bool free_res);
 
 HPExport struct hplugin_info pinfo = {
 	"mimic_animations",   // Plugin name
@@ -71,20 +77,44 @@ HPExport struct hplugin_info pinfo = {
 	HPM_VERSION,                 // HPM Version (don't change, macro is automatically updated)
 };
 
+/**
+ * Recover TID of current timer, if any
+ */
+static struct skill_animation_timer* get_timer(struct map_session_data* sd)
+{
+	struct skill_animation_timer* data = getFromMSD(sd, 0);
+
+	if (data == NULL) {
+		CREATE(data, struct skill_animation_timer, 1);
+		data->tid = INVALID_TIMER;
+
+		addToMSD(sd, data, 0, true);
+	}
+
+	return data;
+}
+
 /*
  * Sends a single attack animation packet
  * This method mimics the attack animation once.
  */
-void send_attack_packet(struct block_list* bl, int motion_speed)
+void send_attack_packet(struct block_list* bl, int target_id, int motion_speed)
 {
-	unsigned char buf[32];
-	nullpo_retv(bl);
-	WBUFW(buf, 0) = 0x8a;
-	WBUFL(buf, 2) = bl->id;
-	WBUFL(buf, 14) = motion_speed;
-	WBUFB(buf, 26) = BDT_CRIT; // BDT_CRIT should display that star-like multicolored hit effect, but doesn't
 
-	clif->send(buf, packet_len(0x8a), bl, AREA);
+	struct packet_damage p;
+
+	p.PacketType = damageType;
+	p.GID = bl->id;
+	p.attackMT = motion_speed;
+	p.count = 1;
+	p.action = BDT_NORMAL;
+	if (bl->type == BL_MOB) {
+		// Sending the target fixes monsters flipping arround when attacking
+		// This also reproduces additional hitting animations, but better than nothing
+		p.targetGID = target_id;
+	}
+
+	clif->send(&p, sizeof(p), bl, AREA);
 }
 
 /*
@@ -117,13 +147,26 @@ static int use_animation(int tid, int64 tick, int id, intptr_t data) {
 	struct skill_environment_data* skill_env = (struct skill_environment_data*)data;
 
 	struct skill_animation_data* anim_data = skill_env->anim_data;
-	send_attack_packet(bl, anim_data->motion_speed);
+	send_attack_packet(bl, skill_env->target_id, anim_data->motion_speed);
 
 	if (anim_data->spin && skill_env->dir != -1) {
 		send_simple_dir(bl, skill_env->target_id, skill_env->dir);
+		skill_env->dir = unit_get_ccw90_dir(skill_env->dir);
 	}
 
-	aFree((void *)data);
+	skill_env->step++;
+	int64 timer_id = INVALID_TIMER;
+
+	if (skill_env->step < anim_data->motion_count) {
+		timer_id = timer->add(tick + anim_data->interval, use_animation, id, (intptr)skill_env);
+	} else {
+		aFree((void*)data);
+	}
+
+	if (bl->type == BL_PC) {
+		struct skill_animation_timer* skill_timer = get_timer(BL_CAST(BL_PC, bl));
+		skill_timer->tid = timer_id;
+	}
 
 	return 0;
 }
@@ -141,36 +184,61 @@ static int check_used_skill(int retVal, struct block_list* src, struct block_lis
 
 	int start_time = anim_data->start == -1 ? sdelay : anim_data->start;
 	int target_id = dst->id;
-	int dir = in_damage != 0 ? unit->getdir(dst) : -1; // If source misses, there's no direction change on target
+	enum unit_dir dir = in_damage != 0 ? unit->getdir(dst) : -1; // If source misses, there's no direction change on target
 
-	for (int n = 0; n < anim_data->motion_count; n++) {
-		struct skill_environment_data* skill_env = aMalloc(sizeof(struct skill_environment_data));
-		skill_env->anim_data = anim_data;
-		skill_env->target_id = target_id;
-		if (anim_data->spin && dir != -1)
-			dir = calc_dir_counter_clockwise(dir);
-		skill_env->dir = dir;
-		
-		timer->add(tick + start_time + anim_data->interval * n, use_animation, src->id, (intptr)skill_env);
+	struct skill_environment_data* skill_env = aMalloc(sizeof(struct skill_environment_data));
+	skill_env->anim_data = anim_data;
+	skill_env->target_id = target_id;
+	if (anim_data->spin && dir != -1)
+		dir = unit_get_ccw90_dir(dir);
+	skill_env->dir = dir;
+	skill_env->step = 0;
+
+	clear_timer(src, true); // Remove previous animation if any
+	int64 tid = timer->add(tick + start_time + anim_data->interval, use_animation, src->id, (intptr)skill_env);
+
+	if (src->type == BL_PC) {
+		struct skill_animation_timer* skill_timer = get_timer(BL_CAST(BL_PC, src));
+		skill_timer->tid = tid;
 	}
 
 	return 0;
 }
 
-/*
- * Calcs direction counter clockwise
+/**
+ * Remove animation when teleporting away (player only)
  */
-static int calc_dir_counter_clockwise(int dir) {
-	dir += 2;
-	if (dir >= UNIT_DIR_MAX)
-		dir = dir - UNIT_DIR_MAX;
-	return dir;
+static void on_unit_teleported(struct map_session_data* sd, short m, int x, int y) {
+	clear_timer(&sd->bl, true);
+}
+
+
+/**
+ * Removes any pending animation
+ */
+static void clear_timer(struct block_list* bl, bool free_res) {
+	if (bl == NULL || bl->type != BL_PC)
+		return;
+
+	struct map_session_data* sd = BL_CAST(BL_PC, bl);
+	struct skill_animation_timer* skill_timer = get_timer(sd);
+
+	if (skill_timer->tid == INVALID_TIMER)
+		return;
+
+	struct TimerData *td = timer->get(skill_timer->tid);
+	timer->delete(skill_timer->tid, use_animation);
+	skill_timer->tid = INVALID_TIMER;
+
+	if (free_res && td->data) {
+		aFree((void*)td->data);
+	}
 }
 
 /*
  * Gets the matching animation data of a skill, if any
  */
-static struct skill_animation_data *get_animation_info(int skill_id)
+static struct skill_animation_data* get_animation_info(int skill_id)
 {
 	for (int i = 0; i < ARRAYLENGTH(sad_list); i++) {
 		if (sad_list[i].skill_id == skill_id) {
@@ -185,5 +253,7 @@ HPExport void plugin_init(void)
 {
 #if PACKETVER >= 20181128
 	addHookPost(clif, skill_damage, check_used_skill);
+	addHookPost(clif, changemap, on_unit_teleported);
+	ShowInfo("Mimic animations plugin loaded.\n");
 #endif
 }

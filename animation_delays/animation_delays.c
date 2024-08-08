@@ -3,7 +3,7 @@
 //===== By: ========================================================
 //= csnv
 //===== Version: ===================================================
-//= 1.1
+//= 1.2
 //===== Description: ===============================================
 //= Enables hard delays based on an aproximation of client behavior
 //===== Repository: ================================================
@@ -129,8 +129,10 @@ static struct skill_adelay_timer* get_adelays_timer(struct map_session_data* sd)
  * Store last skill usage time and id
  */
 static void set_adelays_timer(struct block_list* src, uint16 skill_id)
-{
-	nullpo_retv(src);
+{	
+	if (src == NULL)
+		return;
+
 	struct map_session_data* sd = BL_CAST(BL_PC, src);
 
 	if (sd == NULL)

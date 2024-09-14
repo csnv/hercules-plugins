@@ -3,7 +3,7 @@
 //===== By: ========================================================
 //= csnv
 //===== Version: ===================================================
-//= 1.1
+//= 1.2
 //===== Description: ===============================================
 //= Imitates skill animations removed in 2018+ clients
 //===== Repository: ================================================
@@ -32,12 +32,12 @@
 #include "common/HPMDataCheck.h"
 
 struct skill_animation_data {
-	int skill_id; // Skill ID
-	int start; // Start animation after X ms have passed (-1 for sdelay)
-	int interval; // Time between actions
+	int skill_id;     // Skill ID
+	int start;        // Start animation after X ms have passed (-1 for sdelay)
+	int interval;     // Time between actions
 	int motion_speed; // Animation speed for each action
 	int motion_count; // Number of actions per animation
-	bool spin; // Make target spin (Sonic blow)
+	bool spin;        // Make target spin (Sonic blow)
 };
 
 /*
@@ -52,18 +52,20 @@ struct skill_animation_data sad_list[] = {
  * Auxiliary data
  */
 struct skill_environment_data {
-	struct skill_animation_data* anim_data;
-	int target_id;
-	int8 dir;
-	int8 step;
+	struct skill_animation_data* anim_data; // Animation data (check struct skill_animation_data)
+	int target_id;                          // Skill target id
+	uint16 target_x;                        // Target's X coordinate at each iteration
+	uint16 target_y;                        // Target's Y coordinate at each iteration
+	int8 dir;                               // Target's direction - only useful when the skill makes the target spin
+	int8 step;                              // Iteration step
 };
 
 struct skill_animation_timer {
-	int64 tid;
+	int tid;
 };
 
+void send_dir_packet(struct block_list* bl, int target_id, int8 dir);
 void send_attack_packet(struct block_list* bl, int target_id, int motion_speed);
-void send_simple_dir(struct block_list* src, int target_id, int dir);
 static int use_animation(int tid, int64 tick, int id, intptr_t data);
 static int check_used_skill(int retVal, struct block_list* src, struct block_list* dst, int64 tick, int sdelay, int ddelay, int64 in_damage, int div, uint16 skill_id, uint16 skill_lv, enum battle_dmg_type type);
 static struct skill_animation_data* get_animation_info(int skill_id);
@@ -72,9 +74,9 @@ static void clear_timer(struct block_list* bl, bool free_res);
 
 HPExport struct hplugin_info pinfo = {
 	"mimic_animations",   // Plugin name
-	SERVER_TYPE_MAP,             // Which server types this plugin works with?
-	"1.0",                       // Plugin version
-	HPM_VERSION,                 // HPM Version (don't change, macro is automatically updated)
+	SERVER_TYPE_MAP,      // Which server types this plugin works with?
+	"1.2",                // Plugin version
+	HPM_VERSION,          // HPM Version (don't change, macro is automatically updated)
 };
 
 /**
@@ -100,7 +102,6 @@ static struct skill_animation_timer* get_timer(struct map_session_data* sd)
  */
 void send_attack_packet(struct block_list* bl, int target_id, int motion_speed)
 {
-
 	struct packet_damage p;
 
 	p.PacketType = damageType;
@@ -108,28 +109,30 @@ void send_attack_packet(struct block_list* bl, int target_id, int motion_speed)
 	p.attackMT = motion_speed;
 	p.count = 1;
 	p.action = BDT_NORMAL;
-	if (bl->type == BL_MOB) {
-		// Sending the target fixes monsters flipping arround when attacking
-		// This also reproduces additional hitting animations, but better than nothing
-		p.targetGID = target_id;
-	}
 
 	clif->send(&p, sizeof(p), bl, AREA);
 }
 
-/*
- * Sends a single direction change packet
- * Used for the spinning effect of some skills.
+/**
+ * Force display a certain direction on the unit
  */
-void send_simple_dir(struct block_list* src, int target_id, int dir)
+void send_dir_packet(struct block_list* bl, int target_id, int8 dir)
 {
 	unsigned char buf[64];
+
+	nullpo_retv(bl);
 	WBUFW(buf, 0) = 0x9c;
-	WBUFL(buf, 2) = target_id;
-	WBUFW(buf, 6) = 0;
+	WBUFL(buf, 2) = target_id ? target_id : bl->id;
+	WBUFW(buf, 6) = bl->type == BL_PC ? BL_UCCAST(BL_PC, bl)->head_dir : 0;
 	WBUFB(buf, 8) = dir;
 
-	clif->send(buf, packet_len(0x9c), src, AREA);
+	clif->send(buf, packet_len(0x9c), bl, AREA);
+
+	if (clif->isdisguised(bl)) {
+		WBUFL(buf, 2) = -bl->id;
+		WBUFW(buf, 6) = 0;
+		clif->send(buf, packet_len(0x9c), bl, SELF);
+	}
 }
 
 /*
@@ -145,23 +148,33 @@ static int use_animation(int tid, int64 tick, int id, intptr_t data) {
 	}
 
 	struct skill_environment_data* skill_env = (struct skill_environment_data*)data;
-
 	struct skill_animation_data* anim_data = skill_env->anim_data;
+	struct block_list* target = map->id2bl(skill_env->target_id);
+
+	if (target) {
+		skill_env->target_x = target->x;
+		skill_env->target_y = target->y;
+	}
+
 	send_attack_packet(bl, skill_env->target_id, anim_data->motion_speed);
 
+	// Fixes direction of units attacking while moving
+	int dir = map->calc_dir(bl, skill_env->target_x, skill_env->target_y);
+	send_dir_packet(bl, 0, dir);
+
+	// Skill requires target to spin
 	if (anim_data->spin && skill_env->dir != -1) {
-		send_simple_dir(bl, skill_env->target_id, skill_env->dir);
+		send_dir_packet(bl, skill_env->target_id, skill_env->dir);
 		skill_env->dir = unit_get_ccw90_dir(skill_env->dir);
 	}
 
 	skill_env->step++;
-	int64 timer_id = INVALID_TIMER;
+	int timer_id = INVALID_TIMER;
 
-	if (skill_env->step < anim_data->motion_count) {
+	if (skill_env->step < anim_data->motion_count)
 		timer_id = timer->add(tick + anim_data->interval, use_animation, id, (intptr)skill_env);
-	} else {
+	else
 		aFree((void*)data);
-	}
 
 	if (bl->type == BL_PC) {
 		struct skill_animation_timer* skill_timer = get_timer(BL_CAST(BL_PC, bl));
@@ -191,11 +204,14 @@ static int check_used_skill(int retVal, struct block_list* src, struct block_lis
 	skill_env->target_id = target_id;
 	if (anim_data->spin && dir != -1)
 		dir = unit_get_ccw90_dir(dir);
+
+	skill_env->target_x = dst->x;
+	skill_env->target_y = dst->y;
 	skill_env->dir = dir;
 	skill_env->step = 0;
 
 	clear_timer(src, true); // Remove previous animation if any
-	int64 tid = timer->add(tick + start_time + anim_data->interval, use_animation, src->id, (intptr)skill_env);
+	int tid = timer->add(tick + start_time + anim_data->interval, use_animation, src->id, (intptr)skill_env);
 
 	if (src->type == BL_PC) {
 		struct skill_animation_timer* skill_timer = get_timer(BL_CAST(BL_PC, src));
@@ -226,7 +242,7 @@ static void clear_timer(struct block_list* bl, bool free_res) {
 	if (skill_timer->tid == INVALID_TIMER)
 		return;
 
-	struct TimerData *td = timer->get(skill_timer->tid);
+	const struct TimerData* td = timer->get(skill_timer->tid);
 	timer->delete(skill_timer->tid, use_animation);
 	skill_timer->tid = INVALID_TIMER;
 

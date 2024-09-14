@@ -1,3 +1,7 @@
+1.2
+- Fixes all units flipping around when attacking, with a more elegant solution
+- Clean up and comments
+
 1.1
 - Fixed monsters flipping around when attacking.
 - Fixed animation being reproduced when the character teleports around.

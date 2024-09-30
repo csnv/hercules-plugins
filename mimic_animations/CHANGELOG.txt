@@ -1,5 +1,9 @@
+1.3
+- Fixed an incorrect interaction with certain skills that induced walk delay.
+- Fixed an issue where monsters were not removed from the screen when killed while a skill animation was in progress.
+
 1.2
-- Fixes all units flipping around when attacking, with a more elegant solution
+- Fixed all units flipping around when attacking, with a more elegant solution
 - Clean up and comments
 
 1.1

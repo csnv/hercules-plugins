@@ -3,7 +3,7 @@
 //===== By: ========================================================
 //= csnv
 //===== Version: ===================================================
-//= 1.2
+//= 1.3
 //===== Description: ===============================================
 //= Imitates skill animations removed in 2018+ clients
 //===== Repository: ================================================
@@ -75,7 +75,7 @@ static void clear_timer(struct block_list* bl, bool free_res);
 HPExport struct hplugin_info pinfo = {
 	"mimic_animations",   // Plugin name
 	SERVER_TYPE_MAP,      // Which server types this plugin works with?
-	"1.2",                // Plugin version
+	"1.3",                // Plugin version
 	HPM_VERSION,          // HPM Version (don't change, macro is automatically updated)
 };
 
@@ -156,11 +156,13 @@ static int use_animation(int tid, int64 tick, int id, intptr_t data) {
 		skill_env->target_y = target->y;
 	}
 
-	send_attack_packet(bl, skill_env->target_id, anim_data->motion_speed);
+	if (!status->isdead(bl)) {
+		send_attack_packet(bl, skill_env->target_id, anim_data->motion_speed);
 
-	// Fixes direction of units attacking while moving
-	int dir = map->calc_dir(bl, skill_env->target_x, skill_env->target_y);
-	send_dir_packet(bl, 0, dir);
+		// Fixes direction of units attacking while moving
+		int dir = map->calc_dir(bl, skill_env->target_x, skill_env->target_y);
+		send_dir_packet(bl, 0, dir);
+	}
 
 	// Skill requires target to spin
 	if (anim_data->spin && skill_env->dir != -1) {
@@ -193,7 +195,7 @@ static int check_used_skill(int retVal, struct block_list* src, struct block_lis
 	struct skill_animation_data* anim_data = get_animation_info(skill_id);
 
 	if (anim_data == NULL)
-		return 0; // Not a skill that requires this
+		return retVal; // Not a skill that requires this
 
 	int start_time = anim_data->start == -1 ? sdelay : anim_data->start;
 	int target_id = dst->id;
@@ -218,7 +220,7 @@ static int check_used_skill(int retVal, struct block_list* src, struct block_lis
 		skill_timer->tid = tid;
 	}
 
-	return 0;
+	return retVal;
 }
 
 /**

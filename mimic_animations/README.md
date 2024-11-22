@@ -5,3 +5,12 @@ Use server side fake packets to force the client to display attack-like animatio
 
 > [!WARNING]
 > As this plugin uses fake packets tightly tied to small timers, the user experience may not be ideal if the user connectivity is of bad quality.
+
+## Animations showcase
+
+#### Sonic blow
+
+![](assets/sonic-blow-g.gif)
+
+#### Vulcan Arrow
+![](assets/vulcan-arrow-g.gif)

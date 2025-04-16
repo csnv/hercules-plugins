@@ -199,7 +199,7 @@ static int at_clone_spawn_vending(struct map_session_data* sd)
 	}
 
 	// Vending, buying, inventory and cart data
-	memcpy(&tc->sd.vending, &sd->vending, sizeof(struct s_vending [MAX_VENDING]));
+	memcpy(&tc->sd.vending, &sd->vending, sizeof(struct s_vending[MAX_VENDING]));
 	memcpy(&tc->sd.buyingstore.items, sd->buyingstore.items, (sizeof(struct s_buyingstore_item[MAX_BUYINGSTORE_SLOTS])));
 	memcpy(&tc->sd.status.inventory, &sd->status.inventory, sizeof(struct item[MAX_INVENTORY]));
 	memcpy(&tc->sd.status.cart, &sd->status.cart, sizeof(struct item[MAX_CART]));
@@ -229,8 +229,25 @@ static int at_clone_spawn_vending(struct map_session_data* sd)
 }
 
 /**
+ * Prevent trading clones to receive damage
+ */
+static int status_damage_pre(struct block_list** src, struct block_list** target, int64* in_hp, int64* in_sp, int* walkdelay, int* flag)
+{
+	struct block_list* tgt = *target;
+	if (tgt->type != BL_MOB)
+		return 0;
+
+	struct trade_clone* td = getFromMOBDATA((struct mob_data*)tgt, 0);
+	if (td == NULL)
+		return 0;
+
+	hookStop(); // Don't let trade clones receive damage
+	return 0;
+}
+
+/**
  * clif->getareachar_unit posthook
- * 
+ *
  * Notifies approaching clients of the visual details (pushcat, vending/buying board)
  */
 static void clif_getareachar_unit_post(struct map_session_data* sd, struct block_list* bl)
@@ -275,9 +292,9 @@ static bool chrif_save_pre(struct map_session_data** sd, int* flag)
 {
 	struct trade_clone* tc = idb_get(clone_db, (*sd)->status.char_id);
 
-	if (tc == NULL || tc->sd.bl.id != (* sd)->bl.id) // Real SD being saved
+	if (tc == NULL || tc->sd.bl.id != (*sd)->bl.id) // Real SD being saved
 		return true;
-	
+
 	hookStop();
 	save(tc);
 
@@ -386,12 +403,12 @@ static void remove_clone(int char_id)
 
 	struct mob_data* md = tc->md;
 	if (tc->type == TD_VC) {
-		clif->closevendingboard(&md->bl, 0);
+			clif->closevendingboard(&md->bl, 0);
 		pc->autotrade_update(&tc->sd, PAUC_REMOVE);
 		idb_remove(vending->db, char_id);
 		idb_remove(vender_db, tc->sd.vender_id);
 	} else {
-		clif->buyingstore_disappear_entry(&tc->md->bl);
+			clif->buyingstore_disappear_entry(&tc->md->bl);
 #ifdef HERACLES_VERSION
 		idb_remove(buyingstore->db, char_id);
 #endif
@@ -414,8 +431,8 @@ static void remove_clone(int char_id)
 
 /**
  * Clif->search_store_info_ack prehook
- * 
- * Replaces ids from account_id to the mob data id of trade clones 
+ *
+ * Replaces ids from account_id to the mob data id of trade clones
  */
 static void clif_searchstoreinfo_pre(struct map_session_data** _sd)
 {
@@ -716,7 +733,7 @@ static int memitemdata_to_sql(const struct item* p_items, int current_size, int 
 #if defined(AUTOTRADE_PERSISTENCY) && defined(SUPPORT_AT_PERSISTENCY)
 /**
  * pc->autotrade_load prehook
- * 
+ *
  * Replaces default functionality. Loads vending data into a clone.
  */
 static void pc_autotrade_load_pre(void)
@@ -793,7 +810,7 @@ static void autotrade_clone(struct trade_clone* tc)
 	mstatus->mode = 0;
 	mstatus->hp = mstatus->max_hp = 1;
 
-	if (SQL_ERROR == SQL->StmtPrepare(stmt, "SELECT " 
+	if (SQL_ERROR == SQL->StmtPrepare(stmt, "SELECT "
 		"`c`.`name`,`c`.`base_level`,`c`.`class`,`c`.`zeny`,`c`.`sex`,`c`.`hair`,`c`.`hair_color`,`c`.`clothes_color`,`c`.`body`,"
 		"`c`.`weapon`,`c`.`shield`,`c`.`head_top`,`c`.`head_mid`,`c`.`head_bottom`,`c`.`last_map`,`c`.`robe`,`c`.`last_x`,`c`.`last_y`,"
 		"`l`.`group_id`, `l`.`sex`"
@@ -991,7 +1008,7 @@ static int char_getgender(char sex, char sex2)
 
 /**
  * char->delete_char_sql posthook
- * 
+ *
  * Sends a packet informing of a char delection to the map server
  * so the map server can delete the related clone if any
  */
@@ -1034,7 +1051,7 @@ int battle_check_target_post(int retval, struct block_list* src, struct block_li
 
 /**
  * Autotrade timeout timer.
- * 
+ *
  * If data = 0, update remaining time and save
  * If data = 1, timer expired and clone must be removed
  */
@@ -1048,7 +1065,7 @@ static int timeout_timer(int tid, int64 tick, int id, intptr_t data)
 		tc->options.time = 0;
 	else
 		tc->options.time -= map->autosave_interval;
-	
+
 	if (tc->options.time <= 0) {
 		ShowInfo("[at2] Removing clone: %d\n", tc->sd.status.char_id);
 		remove_clone(tc->sd.status.char_id);
@@ -1120,7 +1137,7 @@ ACMD(autotrade2) {
 
 	chrif->charselectreq(sd, sockt->session[fd]->client_addr);
 	timer->add(timer->gettick() + 500, map_quit_timer, sd->bl.id, 0);
-		
+
 	return false;/* we fail to not cause it to proceed on is_atcommand */
 }
 
@@ -1135,6 +1152,7 @@ HPExport void plugin_init(void) {
 
 		addHookPre(chrif, save, chrif_save_pre);
 		addHookPre(map, quit, map_quit_pre);
+		addHookPre(status, damage, status_damage_pre);
 		addHookPre(clif, search_store_info_ack, clif_searchstoreinfo_pre);
 
 		addHookPost(clif, authok, clif_authok_post);
